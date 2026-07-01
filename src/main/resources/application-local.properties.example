@@ -1,0 +1,15 @@
+# ── SMTP local credentials (Gmail) ─────────────────────────────────────────
+# Copy this file to "application-local.properties" (same folder) and fill in your
+# values. The real file is git-ignored, so your password is never committed.
+#
+# How to get a Gmail App Password:
+#   1. Enable 2-Step Verification on your Google account.
+#   2. Go to https://myaccount.google.com/apppasswords
+#   3. Create an app password (16 characters) and paste it below (spaces are OK).
+#
+# After creating the file, restart the backend. The OTP email (FR + EN) will then
+# be delivered to the registrant's inbox instead of being logged to the console.
+
+spring.mail.username=your.address@gmail.com
+spring.mail.password=xxxx xxxx xxxx xxxx
+app.mail.from=EduNova+ <your.address@gmail.com>
