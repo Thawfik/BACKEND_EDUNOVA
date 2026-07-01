@@ -3,28 +3,47 @@ package com.studyplatform.service;
 import jakarta.mail.internet.MimeMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
 
 /**
- * Sends transactional emails. Currently only the bilingual (FR/EN) OTP
- * welcome email. If no SMTP username is configured the code is logged
- * instead of sent, so local development works without credentials.
+ * Sends transactional emails (currently the bilingual FR/EN OTP welcome mail).
+ *
+ * Delivery is attempted in this order:
+ *   1. Resend HTTP API — works on hosts that block outbound SMTP, notably
+ *      Render's free tier (ports 25/465/587 are blocked there since 09/2025).
+ *   2. Gmail SMTP — handy for local development.
+ * With neither configured the code is logged instead of sent, so local dev
+ * works without any credentials.
  */
 @Service
 @Slf4j
 public class EmailService {
 
+    private static final String SUBJECT =
+            "EduNova+ — Votre code de vérification / Your verification code";
+
     private final JavaMailSender mailSender;
+    private final RestClient restClient = RestClient.create();
 
     @Value("${app.mail.from}")
     private String from;
 
     @Value("${spring.mail.username:}")
     private String smtpUsername;
+
+    @Value("${app.mail.resend.api-key:}")
+    private String resendApiKey;
+
+    @Value("${app.mail.resend.url:https://api.resend.com/emails}")
+    private String resendUrl;
 
     @Value("${app.otp.expiry-minutes:10}")
     private int expiryMinutes;
@@ -34,22 +53,51 @@ public class EmailService {
     }
 
     public void sendOtpEmail(String to, String firstName, String code) {
-        if (smtpUsername == null || smtpUsername.isBlank()) {
-            log.warn("[DEV] SMTP not configured — OTP for {} is: {}", to, code);
-            return;
-        }
+        String html = buildHtml(firstName, code);
 
+        if (resendApiKey != null && !resendApiKey.isBlank()) {
+            sendViaResend(to, html, code);
+        } else if (smtpUsername != null && !smtpUsername.isBlank()) {
+            sendViaSmtp(to, html, code);
+        } else {
+            log.warn("[DEV] Email not configured (no RESEND_API_KEY / SMTP) — OTP for {} is: {}", to, code);
+        }
+    }
+
+    /** Delivery over HTTPS — unaffected by SMTP port blocking on Render's free tier. */
+    private void sendViaResend(String to, String html, String code) {
+        try {
+            Map<String, Object> body = Map.of(
+                    "from", from,
+                    "to", List.of(to),
+                    "subject", SUBJECT,
+                    "html", html);
+            restClient.post()
+                    .uri(resendUrl)
+                    .header("Authorization", "Bearer " + resendApiKey)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+            log.info("OTP email sent to {} via Resend", to);
+        } catch (Exception e) {
+            log.error("Failed to send OTP email to {} via Resend: {}", to, e.getMessage());
+            log.warn("[FALLBACK] OTP for {} is: {}", to, code);
+        }
+    }
+
+    private void sendViaSmtp(String to, String html, String code) {
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, StandardCharsets.UTF_8.name());
             helper.setFrom(from);
             helper.setTo(to);
-            helper.setSubject("EduNova+ — Votre code de vérification / Your verification code");
-            helper.setText(buildHtml(firstName, code), true);
+            helper.setSubject(SUBJECT);
+            helper.setText(html, true);
             mailSender.send(message);
-            log.info("OTP email sent to {}", to);
+            log.info("OTP email sent to {} via SMTP", to);
         } catch (Exception e) {
-            log.error("Failed to send OTP email to {}: {}", to, e.getMessage());
+            log.error("Failed to send OTP email to {} via SMTP: {}", to, e.getMessage());
             log.warn("[FALLBACK] OTP for {} is: {}", to, code);
         }
     }
